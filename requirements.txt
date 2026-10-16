@@ -1,0 +1,10 @@
+streamlit==1.65.0
+pandas==3.0.6
+numpy==2.5.4
+plotly==7.1.0
+openpyxl==3.1.5
+langgraph
+langchain==1.4.6
+langchain-openai==1.7.2
+python-dotenv==1.2.4
+requests==2.34.2

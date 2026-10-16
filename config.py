@@ -5,13 +5,6 @@ from dotenv import load_dotenv
 # 加载 .env 文件
 load_dotenv()
 
-# 获取环境变量
-DEEPSEEK_MODEL_ID = os.getenv("DEEPSEEK_MODEL_ID")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT"))
-
-
 class Settings:
     """集中管理所有可配置项。"""
 
@@ -22,13 +15,15 @@ class Settings:
     CORS_ORIGINS: list = ["http://localhost:8501", "http://localhost:8502"]
 
     # ---------- 数据库（SQLite） ----------
-    DATABASE_URL: str = f"sqlite:///{Path(BASE_DIR) / 'database' / 'supermarket.db'}"
+    DB_PATH: Path = BASE_DIR / "database" / "app.db"
 
     # --------- LLM：deepseek-flash（OpenAI 兼容 + 原生多模态） ----------
-    DEEPSEEK_API_KEY: str = DEEPSEEK_API_KEY
-    DEEPSEEK_MODEL_ID: str = DEEPSEEK_MODEL_ID
-    LLM_BASE_URL: str = LLM_BASE_URL
-    LLM_TIMEOUT: int = LLM_TIMEOUT
+    #获取环境变量
+    DEEPSEEK_MODEL_ID: str = os.getenv("DEEPSEEK_MODEL_ID")
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY")
+    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL")
+    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
+
 
 # 实例化配置类
 settings = Settings()
