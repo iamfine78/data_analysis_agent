@@ -1,22 +1,3 @@
-"""
-Agent 工具集。
-
-★ 安全设计的核心约束：
-  `create_agent` 是"模型自主决定调哪个工具"的黑盒循环，
-  无法像手写 StateGraph 那样在图上插入"执行前必须先过校验"的节点。
-  → 因此所有安全校验必须【内嵌在工具函数内部】，绝不能只写在提示词里。
-    提示词是"请求模型配合"，代码校验才是"强制"。
-
-★ 数据不入上下文：
-  工具通过 ToolRuntime 读取 state.table_name，自己从数据库取数据。
-  绝不把 DataFrame 当参数传进工具——那会让整张表进 LLM 上下文，token 直接爆炸。
-
-★ 隔离程度的诚实说明：
-  本文件用 "AST 白名单 + 受限 builtins" 在【同进程】内执行 pandas 代码。
-  这能挡住绝大多数误操作与明显恶意代码，但【不是完备沙箱】。
-  生产环境应改为子进程 / 容器隔离（见文件末尾 TODO）。
-"""
-
 import ast
 import io
 from contextlib import redirect_stdout

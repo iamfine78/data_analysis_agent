@@ -1,12 +1,3 @@
-"""
-Agent 状态定义。
-
-★ 为什么必须有这个文件：
-  `create_agent(..., state_schema=AnalysisState)` 需要它。
-  工具函数通过 `runtime: ToolRuntime` 注入后读取 `runtime.state`——
-  【未在 schema 中声明的字段会被静默丢弃】，不会报错，只会拿到 None。
-"""
-
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage

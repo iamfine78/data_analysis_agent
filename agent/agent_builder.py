@@ -1,16 +1,3 @@
-"""
-Agent 组装。
-
-★ 组装顺序的三个要点（都经过实测确认）：
-  1. 必须传 state_schema=AnalysisState
-     否则工具通过 ToolRuntime 读 runtime.state 时会拿到 None（字段被静默丢弃）
-  2. 必须传 handle_tool_errors=True
-     否则工具抛异常会直接炸穿整个图；开启后异常会变成 ToolMessage 回给模型，
-     框架还会自动附上 "Please fix your mistakes."，天然支持自我修复
-  3. tools 的 docstring 就是路由规则
-     模型靠工具名 + 描述决定调哪个，提示词里的长段说明不能替代它
-"""
-
 from langchain.agents import create_agent
 
 from agent.prompt_templates import build_system_prompt
