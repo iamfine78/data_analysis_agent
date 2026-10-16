@@ -278,7 +278,7 @@ st.dataframe(
          "来源": ".env"},
         {"参数": "LLM_TIMEOUT", "当前值": f"{settings.LLM_TIMEOUT} 秒", "来源": ".env"},
     ],
-    use_container_width=True, hide_index=True,
+    width="stretch", hide_index=True,
 )
 
 # ==================== ④ 系统信息 ====================
@@ -337,7 +337,7 @@ st.caption("「对话」页的后端能力探测缓存了 30 秒。修改后端�
 
 m1, m2 = st.columns(2)
 with m1:
-    if st.button("🧹 清除缓存", use_container_width=True):
+    if st.button("🧹 清除缓存", width="stretch"):
         st.cache_data.clear()
         st.success("缓存已清除")
 with m2:

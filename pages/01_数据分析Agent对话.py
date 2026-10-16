@@ -77,6 +77,48 @@ def backend_status() -> tuple[bool, list[str]]:
     return ok, missing
 
 
+# ==================== 落库：会话与任务历史 ====================
+# 页面只负责"决定记什么"，具体 SQL 全部在 database/db_manager.py，
+# 这样表结构只有一处维护，页面里不出现裸 SQL。
+
+_LODGING_ERRORS: list[str] = []          # 落库失败信息（侧栏展示，不打断对话）
+
+
+def _save_session(session_id: str, title: str) -> None:
+    """新建会话记录（失败不打断对话，只在侧栏提示）。"""
+    try:
+        from database.db_manager import insert_session
+        insert_session(session_id, title)
+    except Exception as e:
+        _LODGING_ERRORS.append(f"会话落库失败：{type(e).__name__}: {e}")
+
+
+def _save_title(session_id: str, title: str) -> None:
+    """会话自动命名后同步到数据库。"""
+    try:
+        from database.db_manager import update_session_title
+        update_session_title(session_id, title)
+    except Exception as e:
+        _LODGING_ERRORS.append(f"标题落库失败：{type(e).__name__}: {e}")
+
+
+def _save_task(session_id: str, question: str, result: dict) -> None:
+    """把一次分析结果写入 task_records（供 03 历史页读取）。"""
+    try:
+        from database.db_manager import insert_task_record
+        insert_task_record(
+            session_id=session_id,
+            question=question,
+            generated_sql=result.get("sql") or "",
+            result_preview=result.get("table"),
+            conclusion=result.get("answer") or "",
+            status="success",
+            chart_type=result.get("chart_type") or "",
+        )
+    except Exception as e:
+        _LODGING_ERRORS.append(f"分析记录落库失败：{type(e).__name__}: {e}")
+
+
 def render_status_badges(backend_ok: bool, tables_count: int, session_id: str) -> None:
     """渲染顶部状态徽章：后端状态 / 数据表数量 / 会话ID。"""
     backend_badge = (
@@ -236,6 +278,7 @@ def new_session():
         "messages": []
     }
     st.session_state.current_session_id = sid # 把指针切到新会话
+    _save_session(sid, "新对话")              # ★ 同步落库，历史页才看得到
     return sid
 
 def delete_session(session_id: str):
@@ -263,6 +306,7 @@ def set_session_title(session_id:str, question:str):
     if st.session_state.sessions[session_id]["title"] == "新对话":
         title = question.strip()[:20]
         st.session_state.sessions[session_id]["title"] = title
+        _save_title(session_id, title)        # ★ 同步落库
 
 # ==================== 后端能力探测 + 取数据表 ====================
 ensure_session()
@@ -304,7 +348,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### 会话管理")
 
-    if st.button("➕ 新建对话", use_container_width=True):
+    if st.button("➕ 新建对话", width="stretch"):
         new_session()
         st.rerun()
 
@@ -333,7 +377,7 @@ with st.sidebar:
 
     st.caption(f"当前会话ID: {st.session_state.current_session_id}")
 
-    if st.button("🗑 删除当前对话", use_container_width=True):
+    if st.button("🗑 删除当前对话", width="stretch"):
         delete_session(st.session_state.current_session_id)
         st.rerun()
 
@@ -366,7 +410,7 @@ clicked_question = None
 for idx, (col, item) in enumerate(zip(qq_cols, qq)):
     with col:
         if st.button(item["label"], key=f"qq_{idx}",
-                     use_container_width=True, help=item["q"]):
+                     width="stretch", help=item["q"]):
             clicked_question = item["q"]
 
 # ---------- 当前会话的历史消息 ----------
@@ -396,10 +440,22 @@ if question:
         with st.spinner("正在分析…"):
             if backend_ok:
                 try:
-                    from agent.agent_builder import build_analysis_agent
+                    from agent.agent_builder import (
+                        agent_result_to_page_dict,
+                        build_analysis_agent,
+                    )
 
-                    result = build_analysis_agent().invoke(
-                        {"question": question, "table": selected_table}
+                    # ★ 必须用 AnalysisState 声明的通道名：
+                    #   messages / table_name / user_question / steps
+                    #   用 {"question":..., "table":...} 会被当成未知键丢弃，
+                    #   工具里读不到表名，直接抛"当前没有选中的数据表"。
+                    result = agent_result_to_page_dict(
+                        build_analysis_agent().invoke({
+                            "messages": [{"role": "user", "content": question}],
+                            "table_name": selected_table,
+                            "user_question": question,
+                            "steps": [],
+                        })
                     )
                 except Exception as e:
                     st.warning(
@@ -415,14 +471,14 @@ if question:
         # 图表：区分"没画图"和"画图失败"
         fig = result.get("figure")
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         elif result.get("figure_error"):
             st.warning(f"图表渲染失败：{result['figure_error']}")
 
         # 明细表
         table = result.get("table")
         if table is not None:
-            st.dataframe(table, use_container_width=True)
+            st.dataframe(table, width="stretch")
 
         # 执行过程与 SQL
         with st.expander("查看执行过程"):
@@ -435,6 +491,7 @@ if question:
     messages.append({"role": "assistant", "content": result.get("answer", "")})
     if result.get("table") is not None:
         st.session_state.last_table = result["table"]      # 供 CSV 导出
+    _save_task(sid, question, result)                      # ★ 写入 task_records
     st.rerun()
 
 # ==================== 底部：导出操作（始终可见）====================
@@ -449,7 +506,7 @@ with col_csv:
             data=last_table.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"分析结果_{datetime.now():%Y%m%d_%H%M%S}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.caption("尚无分析结果可导出（先提问一次）")
@@ -468,7 +525,7 @@ with col_md:
             data="\n".join(md_lines).encode("utf-8"),
             file_name=f"对话记录_{datetime.now():%Y%m%d_%H%M%S}.md",
             mime="text/markdown",
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.caption("尚无对话可下载")

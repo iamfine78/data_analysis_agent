@@ -9,11 +9,12 @@
     config.settings.DB_PATH
     database.init_db.init_db()
     database.db_manager.get_connection() / execute_sql()
-    ★ 以下写入函数目前后端【尚未实现】，缺失时页面顶部会给出明确提示：
+    database.db_manager 的写入函数（已实现，缺失时页面顶部会给出提示）：
         insert_task_record(session_id, question, generated_sql, result_preview,
-                           chart_type, conclusion, status) -> int
+                           conclusion, status, chart_type) -> int
         insert_session(session_id, title) -> None
         update_session_title(session_id, title) -> None
+    utils.report_generator：把单条记录导出成 Markdown 报告
 """
 
 import json
@@ -21,6 +22,17 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+
+# 报告导出（缺失时只是少一个按钮，不影响页面其他功能）
+try:
+    from utils.report_generator import (
+        make_report_filename,
+        report_from_task_row,
+        report_to_bytes,
+    )
+    _REPORT_OK = True
+except Exception:
+    _REPORT_OK = False
 
 # ==================== 依赖探测 ====================
 
@@ -215,7 +227,7 @@ with tab_sess:
         st.dataframe(
             show[[c for c in ["session_id", "标题", "创建时间", "最后活动"]
                   if c in show.columns]],
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
 
         if "session_id" in sessions.columns:
@@ -239,7 +251,7 @@ with tab_sess:
                                 st.code(str(r["generated_sql"]), language="sql")
                             prev = safe_json_preview(r.get("result_preview"))
                             if prev is not None:
-                                st.dataframe(prev, use_container_width=True)
+                                st.dataframe(prev, width="stretch")
 
 # ==================== ② 任务记录 ====================
 
@@ -288,7 +300,7 @@ with tab_task:
                 "问题": view.get("question", pd.Series(dtype=str)).astype(str).str[:80],
                 "会话": view.get("session_id", pd.Series(dtype=str)).astype(str).str[:8],
             })
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, width="stretch", hide_index=True)
 
             st.markdown("###### 单条详情")
             labels = [
@@ -312,16 +324,35 @@ with tab_task:
             prev = safe_json_preview(row.get("result_preview"))
             if prev is not None:
                 st.markdown("**结果预览**")
-                st.dataframe(prev, use_container_width=True)
+                st.dataframe(prev, width="stretch")
             if row.get("chart_type"):
                 st.caption(f"图表类型：{row['chart_type']}")
 
-            st.download_button(
-                "⬇️ 导出当前筛选结果 (CSV)",
-                data=view.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"任务记录_{datetime.now():%Y%m%d_%H%M%S}.csv",
-                mime="text/csv",
-            )
+            col_csv, col_md = st.columns(2)
+            with col_csv:
+                st.download_button(
+                    "⬇️ 导出当前筛选结果 (CSV)",
+                    data=view.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"任务记录_{datetime.now():%Y%m%d_%H%M%S}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                )
+            with col_md:
+                if not _REPORT_OK:
+                    st.caption("报告导出不可用（utils/report_generator.py 未就绪）")
+                else:
+                    # 单条记录 → Markdown 报告
+                    report_md = report_from_task_row(row)
+                    st.download_button(
+                        "⬇️ 导出本条分析报告 (Markdown)",
+                        data=report_to_bytes(report_md),
+                        file_name=make_report_filename(
+                            str(row.get("question", "分析报告"))[:20],
+                            str(row.get("created_at", "") or ""),
+                        ),
+                        mime="text/markdown",
+                        width="stretch",
+                    )
 
 # ==================== ③ 数据表登记 ====================
 
@@ -335,7 +366,7 @@ with tab_reg:
         show["导入时间"] = show.get("imported_at", pd.Series(dtype=str)).map(fmt_time)
         cols = [c for c in ["table_name", "source_file", "row_count",
                             "导入时间", "columns_json"] if c in show.columns]
-        st.dataframe(show[cols], use_container_width=True, hide_index=True)
+        st.dataframe(show[cols], width="stretch", hide_index=True)
 
         if "table_name" in registry.columns:
             pick_t = st.selectbox("查看字段清单", registry["table_name"].tolist(),

@@ -64,7 +64,6 @@ def build_analysis_agent():
         tools=ANALYSIS_TOOLS,
         system_prompt=build_system_prompt(),   # ★ v1 里参数名是 system_prompt，不是 prompt
         state_schema=AnalysisState,            # ★ 必须显式传，否则工具读不到自定义字段
-        handle_tool_errors=True,               # ★ 工具异常转成 ToolMessage，支持自我修复
         name="data_analysis_agent",
     )
 
@@ -92,20 +91,37 @@ def extract_answer(result: dict) -> str:
 
 def extract_figure(result: dict):
     """
-    从 Agent 执行过程中取回图表对象。
+    从 Agent 返回的 state 里取回图表对象。
 
-    ★ 为什么这么做：图是工具在 run_pandas_code 里生成的，
-      图形对象不适合放进 state（不可序列化 + 会污染 checkpoint）。
-      这里改为在工具执行后从执行环境里捕获，见 tools.py 的实现约定。
-      当前约定：图对象通过 state 里的 chart 键传递（可选），没有就返回 None。
+    ★ 为什么这么做：Plotly 的 Figure 对象不可 JSON 序列化，
+      直接放进 state 会污染 checkpoint。所以工具 run_pandas_code
+      先把图转成 dict（state.chart_spec），这里再还原成 Figure。
+
+    数据链路：
+        run_pandas_code: fig --figure_to_spec--> state["chart_spec"] (dict)
+                        --spec_to_figure--> Figure --> 页面 st.plotly_chart
     """
-    return (result or {}).get("chart")
+    from utils.visualizer import spec_to_figure
+
+    spec = (result or {}).get("chart_spec")
+    return spec_to_figure(spec)
+
+
+def extract_chart_type(result: dict) -> str:
+    """从 chart_spec 里取出图表类型（pie / bar / line ...），用于历史记录。"""
+    spec = (result or {}).get("chart_spec")
+    if not isinstance(spec, dict):
+        return ""
+    data = spec.get("data")
+    if not data or not isinstance(data[0], dict):
+        return ""
+    return str(data[0].get("type", ""))
 
 
 def agent_result_to_page_dict(result: dict) -> dict:
     """
     把 Agent 返回的 state 适配成【页面已约定好的 result 结构】：
-        {"answer", "table", "figure", "sql", "steps"}
+        {"answer", "table", "figure", "figure_error", "sql", "steps", "chart_type"}
 
     这样 01 页面不需要为新旧两种结果写两套渲染逻辑。
     """
@@ -116,4 +132,5 @@ def agent_result_to_page_dict(result: dict) -> dict:
         "figure_error": None,
         "sql": (result or {}).get("last_sql"),
         "steps": (result or {}).get("steps") or [],
+        "chart_type": extract_chart_type(result),
     }

@@ -161,27 +161,68 @@ def normalize_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
 
 def read_with_encoding(buf, filename: str, encoding: str, header_row: int) -> pd.DataFrame:
-    """按指定编码读取（让用户能主动切换编码）。"""
+    """按指定编码读取（让用户能主动切换编码）。
+
+    ★ 先用 sep=None 让 pandas 自动嗅探分隔符（支持逗号 / 分号 / Tab / 竖线）。
+      不加 sep 时 pandas 只按逗号切分，分号 CSV 会被静默读成"只有一列"，
+      上传还提示成功，之后 Agent 拿到一列无意义数据，很难排查。
+
+    ★ 嗅探失败时回退到默认逗号解析：单列 CSV（没有分隔符）和"表头行设为 1"
+      这类文件，csv.Sniffer 会抛 "Could not determine delimiter"，但内容本身正常。
+      注意回退前必须 seek(0) —— 第一次尝试已经读过流，不复位会读到空内容。
+
+    ★ UnicodeDecodeError 必须原样抛出：编码探测依赖它来判断"这个编码不对"。
+      （它是 ValueError 的子类，若被下面的 except Exception 吞掉，
+         auto_detect_read 就永远试不到 gbk / gb18030 了。）
+    """
     buf.seek(0)
     if filename.lower().endswith((".xlsx", ".xls")):
         return pd.read_excel(buf, header=int(header_row), engine="openpyxl")
-    return pd.read_csv(buf, encoding=encoding, header=int(header_row))
+    try:
+        return pd.read_csv(buf, encoding=encoding, header=int(header_row),
+                           sep=None, engine="python")
+    except UnicodeDecodeError:
+        raise                                  # 交给上层继续试下一个编码
+    except Exception:
+        buf.seek(0)                            # 回退前复位指针
+        return pd.read_csv(buf, encoding=encoding, header=int(header_row))
 
 
 def auto_detect_read(buf, filename: str, header_row: int) -> tuple[pd.DataFrame, str]:
-    """自动探测编码：依次尝试 ENCODINGS，与后端 sniff_and_read 的顺序一致。"""
+    """自动探测编码：依次尝试 ENCODINGS，与后端 sniff_and_read 的顺序一致。
+
+    ★ 异常处理分两类：
+      1. UnicodeDecodeError —— 这个编码不对，换下一个继续试；
+      2. 其它异常（如 sep=None 嗅探失败抛的 "Could not determine delimiter"）
+         —— 与编码无关，是文件内容问题（单列无分隔符 / 空文件 / 全空白）。
+         此时立刻停下，并把原始信息报出去，让用户知道不是编码的锅。
+      若对第 2 类也继续循环，会把"内容问题"误报成"编码都不支持"，
+      用户会一直去切编码，永远修不好。
+    """
     if filename.lower().endswith((".xlsx", ".xls")):
         buf.seek(0)
         return pd.read_excel(buf, header=int(header_row), engine="openpyxl"), "excel"
-    last_err = None
+
+    tried = []
     for enc in ENCODINGS:
         try:
-            df = read_with_encoding(buf, filename, enc, header_row)
-            return df, enc
-        except (UnicodeDecodeError, UnicodeError) as e:
-            last_err = e
+            return read_with_encoding(buf, filename, enc, header_row), enc
+        except UnicodeDecodeError:
+            tried.append(enc)               # 编码不匹配，继续试下一个
             continue
-    raise ValueError(f"尝试了 {ENCODINGS} 均无法解码：{last_err}")
+        except Exception as e:
+            # 编码能解开，但内容解析不了 —— 再换编码也没用，直接报原始原因
+            if type(e).__name__ == "EmptyDataError":
+                raise ValueError(
+                    "文件没有可解析的内容（可能是空文件、只有空行，"
+                    "或表头所在行的设置不对）。请检查文件后重试。"
+                ) from e
+            raise ValueError(
+                f"文件内容无法解析（已用 {enc} 成功解码，问题不在编码）："
+                f"{type(e).__name__}: {e}"
+            ) from e
+
+    raise ValueError(f"尝试了 {ENCODINGS} 均无法解码，已排除：{tried}")
 
 
 def human_size(n: int) -> str:
@@ -307,7 +348,7 @@ else:
             st.warning(w)
 
         st.markdown("###### 数据预览（前 50 行）")
-        st.dataframe(df.head(50), use_container_width=True)
+        st.dataframe(df.head(50), width="stretch")
 
         st.markdown("###### 字段概况")
         profile = pd.DataFrame({
@@ -318,7 +359,7 @@ else:
             "空值率": [f"{df[c].isna().mean() * 100:.1f}%" for c in df.columns],
             "唯一值数": [int(df[c].nunique(dropna=True)) for c in df.columns],
         })
-        st.dataframe(profile, use_container_width=True, hide_index=True)
+        st.dataframe(profile, width="stretch", hide_index=True)
 
         null_mask = (df.isna().mean().values > 0.9)
         high_null = profile.loc[null_mask, "字段名"].tolist()
@@ -424,7 +465,7 @@ else:
             "来源文件": info.get("source_file", "—"),
             "导入时间": str(info.get("imported_at", "—"))[:19],
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     picked = st.selectbox("查看表详情", TABLE_LIST, key="detail_table")
 
@@ -444,7 +485,7 @@ else:
                     }
                     for c in cols
                 ]),
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
         except Exception as e:
             st.error(f"读取表结构失败：{type(e).__name__}: {e}")
@@ -452,7 +493,7 @@ else:
     with col_preview:
         st.markdown("###### 数据预览（前 20 行）")
         try:
-            st.dataframe(get_table_preview(picked, limit=20), use_container_width=True)
+            st.dataframe(get_table_preview(picked, limit=20), width="stretch")
         except Exception as e:
             st.caption(f"无法预览（{type(e).__name__}: {e}）")
 

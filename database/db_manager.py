@@ -63,6 +63,95 @@ def execute_write(sql, params=()):
         conn.close()
 
 
+# ---------- 记录管理（会话 / 任务历史）----------
+# 说明：这两个"记账表"由 init_db() 建好，本区只负责增改，不建表。
+#       页面不直接写 SQL，一律经这里，保证表结构只在一处维护。
+
+def _now() -> str:
+    """统一的时间戳格式（TEXT 列，字符串排序即时间排序）。"""
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def insert_session(session_id: str, title: str = "新会话") -> None:
+    """新建一个会话记录。已存在则忽略（不覆盖已有标题）。"""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions "
+            "(session_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (str(session_id), title, _now(), _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_session_title(session_id: str, title: str) -> None:
+    """更新会话标题（根据首个问题自动命名，或用户手动重命名）。"""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE sessions SET title = ?, updated_at = ? WHERE session_id = ?",
+            (title, _now(), str(session_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_task_record(
+    session_id: str,
+    question: str,
+    generated_sql: str = "",
+    result_preview=None,
+    conclusion: str = "",
+    status: str = "success",
+    chart_type: str = "",
+) -> int:
+    """写入一条分析记录，返回自增 id。
+
+    Args:
+        result_preview: DataFrame / dict / list / 标量均可。
+            会被序列化成 JSON 字符串存入 TEXT 列（SQLite 没有数组类型）。
+            无法序列化时退化为 str()，保证"记录失败"不会拖垮整个分析流程。
+
+    ★ 坑位提醒：
+      1. result_preview 是 TEXT 列，直接塞 DataFrame 会抛 TypeError —— 必须 json.dumps
+      2. created_at 是 NOT NULL 且无默认值 —— 必须显式写入，否则 IntegrityError
+    """
+    import json
+
+    import pandas as pd
+
+    if isinstance(result_preview, pd.DataFrame):
+        payload = result_preview.head(50).to_dict("records")
+    elif isinstance(result_preview, pd.Series):
+        payload = result_preview.head(50).to_dict()
+    else:
+        payload = result_preview
+
+    try:
+        preview_text = json.dumps(payload, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        preview_text = str(payload)
+
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO task_records "
+            "(session_id, question, generated_sql, result_preview, "
+            " chart_type, conclusion, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(session_id), question, generated_sql, preview_text,
+             chart_type or "", conclusion, status, _now()),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
 # ---------- 元数据读取 ----------
 
 def get_table_list():
